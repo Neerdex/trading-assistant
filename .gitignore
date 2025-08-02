@@ -1,0 +1,16 @@
+# Файлы Python
+__pycache__/
+*.pyc
+
+# Секреты
+.env
+*.key
+
+# Данные
+*.csv
+*.pkl
+data/
+
+# Системные файлы
+.DS_Store
+Thumbs.db 
