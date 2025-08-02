@@ -1,131 +1,186 @@
-import matplotlib
-matplotlib.use('Agg')
 import streamlit as st
 import yfinance as yf
-import mplfinance as mpf
 import pandas as pd
-from datetime import datetime, timedelta
+import plotly.graph_objects as go
+import numpy as np
+from datetime import datetime
 
-# Кэшируем загрузку данных для ускорения работы
-@st.cache_data(ttl=3600)  # Обновляем каждый час
+# Настройки
+st.set_page_config(
+    page_title="Трейдинг Помощник",
+    layout="wide",
+    page_icon="💹"
+)
+st.title("💹 Трейдинг Помощник")
+
+# Инициализация состояния сессии
+if 'run_analysis' not in st.session_state:
+    st.session_state.run_analysis = False
+
+# Функция загрузки данных с улучшенной обработкой ошибок
 def load_data(ticker, period, interval):
-    return yf.download(ticker, period=period, interval=interval, auto_adjust=True)
-
-# Функция расчета RSI
-def calculate_rsi(data, window=14):
-    delta = data['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-# Настройка страницы
-st.set_page_config(page_title="Trading Assistant", layout="wide")
-st.title("🚀 Мой Trading Assistant")
-
-# Сайдбар для настроек
-with st.sidebar:
-    st.header("Настройки данных")
-    ticker = st.text_input("Тикер (например AAPL):", "AAPL")
-    
-    # Выбор периода
-    period_options = ["1д", "1нед", "1мес", "3мес", "6мес", "1год", "макс"]
-    period = st.selectbox("Период:", period_options, index=2)
-    period_map = {"1д": "1d", "1нед": "1wk", "1мес": "1mo", 
-                 "3мес": "3mo", "6мес": "6mo", "1год": "1y", "макс": "max"}
-    
-    # Выбор интервала
-    interval_options = ["1м", "5м", "15м", "30м", "1ч", "1д", "1нед"]
-    interval = st.selectbox("Интервал:", interval_options, index=5)
-    interval_map = {"1м": "1m", "5м": "5m", "15м": "15m", 
-                  "30м": "30m", "1ч": "1h", "1д": "1d", "1нед": "1wk"}
-    
-    # Тех. индикаторы
-    st.header("Технические индикаторы")
-    show_sma = st.checkbox("SMA (20 периодов)", True)
-    show_rsi = st.checkbox("RSI (14 периодов)", True)
-
-if ticker:
     try:
-        # Загрузка данных
-        data = load_data(ticker, period_map[period], interval_map[interval])
+        data = yf.download(
+            ticker,
+            period=period,
+            interval=interval,
+            progress=False,
+            auto_adjust=True
+        )
         
-        if data.empty:
-            st.error("Не удалось загрузить данные. Проверьте тикер.")
-        else:
-            # Расчет индикаторов
-            if show_sma:
-                data['SMA_20'] = data['Close'].rolling(window=20).mean()
-                
-            if show_rsi:
-                data['RSI_14'] = calculate_rsi(data)
+        # Проверяем, что данные загружены и есть столбец 'Close'
+        if data.empty or 'Close' not in data.columns:
+            st.error(f"Данные для {ticker} не найдены. Попробуйте другой тикер.")
+            return pd.DataFrame()
             
-            # Отображение основной информации
-            last_close = data['Close'][-1]
-            prev_close = data['Close'][-2] if len(data) > 1 else last_close
-            change = ((last_close - prev_close) / prev_close) * 100
+        # Проверка расхождений с текущей ценой
+        try:
+            ticker_obj = yf.Ticker(ticker)
+            current_info = ticker_obj.fast_info
+            current_price = current_info['lastPrice']
+            last_close = data['Close'].iloc[-1].item()
             
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Текущая цена", f"${last_close:.2f}")
-            col2.metric("Изменение", f"{change:.2f}%", 
-                       delta_color="inverse" if change < 0 else "normal")
-            col3.metric("Последнее обновление", data.index[-1].strftime('%Y-%m-%d %H:%M'))
+            if current_price and last_close:
+                discrepancy = abs(last_close - current_price)
+                if discrepancy > last_close * 0.01:  # >1% расхождения
+                    st.warning(f"⚠️ Расхождение с текущей ценой: {discrepancy:.2f} ({discrepancy/last_close*100:.2f}%)")
+                    st.write(f"Исторические данные: {last_close:.2f} | Текущая цена: {current_price:.2f}")
+        except:
+            pass
             
-            # Настройка индикаторов для графика
-            add_plots = []
-            if show_sma:
-                add_plots.append(mpf.make_addplot(data['SMA_20'], color='blue'))
-            
-            # Создание графиков
-            fig, axes = mpf.plot(
-                data,
-                type='candle',
-                style='charles',
-                title=f"{ticker} | {period} | {interval}",
-                ylabel="Цена ($)",
-                addplot=add_plots,
-                returnfig=True,
-                figsize=(12, 6),
-                volume=True if 'Volume' in data.columns else False,
-                show_nontrading=False,
-                panel_ratios=(4, 1)
-            )
-            
-            # Отображение RSI в отдельной панели
-            if show_rsi:
-                ax_rsi = axes[0].twinx()
-                ax_rsi.plot(data.index, data['RSI_14'], color='purple', alpha=0.7)
-                ax_rsi.axhline(30, color='green', linestyle='--', alpha=0.5)
-                ax_rsi.axhline(70, color='red', linestyle='--', alpha=0.5)
-                ax_rsi.set_ylabel('RSI', color='purple')
-                ax_rsi.tick_params(axis='y', labelcolor='purple')
-                ax_rsi.set_ylim(0, 100)
-            
-            st.pyplot(fig)
-            
-            # Анализ RSI
-            if show_rsi:
-                st.subheader("Анализ RSI")
-                last_rsi = data['RSI_14'].iloc[-1]
-                st.write(f"Текущее значение RSI: **{last_rsi:.2f}**")
-                
-                if last_rsi < 30:
-                    st.success("Сигнал: ПЕРЕПРОДАННОСТЬ (RSI < 30)")
-                    st.info("Традиционная интерпретация: Возможен разворот вверх")
-                elif last_rsi > 70:
-                    st.warning("Сигнал: ПЕРЕКУПЛЕННОСТЬ (RSI > 70)")
-                    st.info("Традиционная интерпретация: Возможен разворот вниз")
-                else:
-                    st.info("RSI в нейтральной зоне (30-70)")
-                
-                # Визуализация RSI
-                st.write("**История RSI за выбранный период:**")
-                st.line_chart(data['RSI_14'])
-            
-            # Дополнительная информация
-            st.subheader("Последние 5 записей")
-            st.dataframe(data.tail(5))
-            
+        return data
     except Exception as e:
-        st.error(f"Ошибка: {str(e)}")
-        st.stop()
+        st.error(f"Ошибка загрузки данных: {str(e)}")
+        return pd.DataFrame()
+
+# Сайдбар
+with st.sidebar:
+    st.header("Настройки")
+    ticker = st.text_input("Тикер (AAPL, BTC-USD):", "AAPL")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        period = st.selectbox(
+            "Период",
+            ["1d", "5d", "1mo", "3mo", "6mo", "1y", "max"],
+            index=2
+        )
+    with col2:
+        interval = st.selectbox(
+            "Интервал",
+            ["1m", "5m", "15m", "30m", "1h", "1d"],
+            index=5
+        )
+    
+    if st.button("Обновить данные", type="primary"):
+        st.session_state.run_analysis = True
+
+# Основной интерфейс
+if st.session_state.run_analysis:
+    try:
+        with st.spinner("Загрузка данных..."):
+            data = load_data(ticker, period, interval)
+            
+        if data.empty:
+            st.warning("Нет данных для отображения. Проверьте параметры и попробуйте снова.")
+        else:
+            # Основные метрики с проверкой на достаточность данных
+            if len(data) > 1:
+                last_close = data['Close'].iloc[-1].item()
+                prev_close = data['Close'].iloc[-2].item()
+                change_pct = round(((last_close - prev_close) / prev_close * 100), 2)
+            else:
+                last_close = data['Close'].iloc[0].item() if len(data) == 1 else 0
+                change_pct = 0
+                st.warning("Мало данных для расчета изменения цены")
+            
+            st.success(f"Данные загружены | {ticker} | {period} | {interval}")
+            
+            # Показываем метрики только если есть данные
+            if last_close > 0:
+                metric_col1, metric_col2 = st.columns(2)
+                metric_col1.metric("Текущая цена", f"{last_close:.2f}")
+                metric_col2.metric("Изменение", f"{change_pct}%", 
+                                  delta_color="inverse" if change_pct < 0 else "normal")
+            
+            # Графики
+            if not data.empty and len(data) > 1:
+                # Простой линейный график как fallback
+                st.subheader("Линейный график")
+                st.line_chart(data['Close'])
+                
+                # Свечной график с улучшениями
+                try:
+                    fig = go.Figure(data=[go.Candlestick(
+                        x=data.index,
+                        open=data['Open'],
+                        high=data['High'],
+                        low=data['Low'],
+                        close=data['Close'],
+                        name="Цены",
+                        increasing_line_color='green',
+                        decreasing_line_color='red'
+                    )])
+                    
+                    # Добавляем скользящие средние
+                    if len(data) > 20:
+                        data['SMA20'] = data['Close'].rolling(window=20).mean()
+                        fig.add_trace(go.Scatter(
+                            x=data.index,
+                            y=data['SMA20'],
+                            name='SMA 20',
+                            line=dict(color='blue', width=2)
+                        ))
+                    
+                    if len(data) > 50:
+                        data['SMA50'] = data['Close'].rolling(window=50).mean()
+                        fig.add_trace(go.Scatter(
+                            x=data.index,
+                            y=data['SMA50'],
+                            name='SMA 50',
+                            line=dict(color='orange', width=2)
+                        ))
+                    
+                    fig.update_layout(
+                        title=f"{ticker} - Свечной график",
+                        xaxis_title="Дата",
+                        yaxis_title="Цена ($)",
+                        height=600,
+                        template="plotly_white",
+                        showlegend=True,
+                        xaxis_rangeslider_visible=False
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Ошибка построения свечного графика: {str(e)}")
+                    st.write("Используем линейный график как запасной вариант")
+            
+            # Исторические данные
+            with st.expander("📋 Подробные исторические данные"):
+                st.dataframe(data.tail(20).sort_index(ascending=False))
+                
+            # Информация о качестве данных
+            with st.expander("🔍 Информация о данных"):
+                st.write(f"**Период данных:** {data.index[0].strftime('%Y-%m-%d')} - {data.index[-1].strftime('%Y-%m-%d')}")
+                st.write(f"**Количество точек:** {len(data)}")
+                st.write(f"**Источник:** Yahoo Finance")
+                st.write(f"**Последнее обновление:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                
+    except Exception as e:
+        st.error(f"Критическая ошибка: {str(e)}")
+        st.write("Параметры запроса:")
+        st.write(f"- Тикер: {ticker}")
+        st.write(f"- Период: {period}")
+        st.write(f"- Интервал: {interval}")
+        # Выводим дополнительную информацию для отладки
+        st.write("Информация о данных:")
+        st.write(f"Количество строк: {len(data)}")
+        st.write(f"Колонки: {data.columns.tolist()}")
+        if not data.empty:
+            st.write("Последние 5 строк:")
+            st.write(data.tail())
+else:
+    st.info("Задайте параметры и нажмите 'Обновить данные'")
+    st.image("https://via.placeholder.com/800x400?text=График+появится+после+загрузки", 
+             caption="Пример интерфейса")
