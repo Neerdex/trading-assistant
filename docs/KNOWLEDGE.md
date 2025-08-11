@@ -35,8 +35,8 @@ trading-assistant/
   - Свечные графики (mplfinance).
   - Расчет RSI и SMA.
   - Streamlit-дашборд с метриками.
-- В процессе:
   - Интеграция Alpaca Paper Trading.
+- В процессе:
   - Добавление простой ML-модели (RandomForest).
 #### **Ближайшие шаги**
 1. **Интерфейс**:
